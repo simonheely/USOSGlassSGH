@@ -1,0 +1,44 @@
+name: Build downloadable iPhone IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build-ipa:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Xcode version
+        run: xcodebuild -version
+      - name: Compile for physical iPhone without signing
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project USOSGlassSGH.xcodeproj \
+            -scheme USOSGlassSGH \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+      - name: Package unsigned IPA for signing on iPhone
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/USOSGlassSGH.app"
+          test -d "$APP" || { echo 'App bundle missing'; exit 1; }
+          mkdir -p "$RUNNER_TEMP/package/Payload" dist
+          ditto "$APP" "$RUNNER_TEMP/package/Payload/USOSGlassSGH.app"
+          (cd "$RUNNER_TEMP/package" && /usr/bin/zip -qry "$GITHUB_WORKSPACE/dist/USOSGlassSGH-unsigned.ipa" Payload)
+          /usr/bin/unzip -t dist/USOSGlassSGH-unsigned.ipa
+      - name: Make IPA downloadable from GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: USOSGlassSGH-iPhone-IPA
+          path: dist/USOSGlassSGH-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30

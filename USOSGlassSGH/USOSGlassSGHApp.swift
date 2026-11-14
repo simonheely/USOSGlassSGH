@@ -60,6 +60,11 @@ struct SourceBadge: View {
 }
 struct RootView: View {
     @State private var selection = 0
+    init() {
+        #if DEBUG
+        _selection = State(initialValue: UserDefaults.standard.integer(forKey: "previewTab"))
+        #endif
+    }
     var body: some View {
         TabView(selection: $selection) {
             Tab("Dzisiaj", systemImage: "sun.max", value: 0) { TodayView() }
@@ -328,7 +333,7 @@ struct GradesView: View {
                 VStack(alignment: .leading, spacing: 22) {
                     SourceBadge()
                     HStack(spacing: 12) {
-                        Metric(value: store.average, label: "średnia wyświetlonych ocen*", icon: "chart.xyaxis.line", tint: Palette.accent)
+                        Metric(value: store.average, label: "średnia orientacyjna*", icon: "chart.xyaxis.line", tint: Palette.accent)
                         Metric(value: "\(store.grades.filter(\.passes).count)", label: "ocen zaliczających", icon: "checkmark.seal", tint: .indigo)
                     }
                     Text("*Orientacyjna średnia arytmetyczna wszystkich pobranych ocen liczbowych z ostatnich 365 dni, także poprawek. Nie jest oficjalną średnią SGH ani średnią ważoną ECTS.").font(.caption).foregroundStyle(.secondary)

@@ -12,7 +12,7 @@ struct CampusLiveActivity: Widget {
             HStack(spacing: 16) {
                 Image(systemName: "graduationcap.fill").font(.title).foregroundStyle(.mint)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(context.attributes.isDemo ? "SGH · DEMO" : "SGH · ZAJĘCIA").font(.caption2.bold()).foregroundStyle(.secondary)
+                    Text(context.attributes.isDemo ? "SGH · DEMO" : "SGH · ZAJĘCIA").font(.caption2.bold()).foregroundStyle(.white.opacity(0.7))
                     Text(context.attributes.title).font(.headline).lineLimit(2)
                     Text(context.attributes.room.isEmpty ? "Sala niepodana" : "Sala \(context.attributes.room)").font(.subheadline)
                 }
@@ -20,6 +20,7 @@ struct CampusLiveActivity: Widget {
                 countdown(context).font(.title3.monospacedDigit().bold()).frame(maxWidth: 100)
             }
             .padding(20)
+            .foregroundStyle(.white)
             .activityBackgroundTint(Color(red: 0.05, green: 0.14, blue: 0.17))
             .activitySystemActionForegroundColor(.white)
             .widgetURL(URL(string: "usosglass://today"))

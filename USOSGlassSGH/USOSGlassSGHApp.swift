@@ -1,582 +1,453 @@
 import SwiftUI
-import Combine
 
 @main
 struct USOSGlassSGHApp: App {
-    @StateObject private var store = DemoStore()
-
+    @StateObject private var store = CampusStore()
+    @Environment(\.scenePhase) private var phase
+    @AppStorage("appearance") private var appearance = "system"
+    @AppStorage("onboarded.v2") private var onboarded = false
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environmentObject(store)
-                .tint(Theme.accent)
+            RootView().environmentObject(store)
+                .tint(Palette.accent)
+                .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
+                .environment(\.locale, Locale(identifier: "pl_PL"))
+                .environment(\.timeZone, CampusTime.calendar.timeZone)
+                .sheet(isPresented: Binding(get: { !onboarded }, set: { onboarded = !$0 })) {
+                    WelcomeView { onboarded = true }
+                }
+                .alert("USOS Glass", isPresented: Binding(get: { store.message != nil }, set: { if !$0 { store.message = nil } })) {
+                    Button("OK") { store.message = nil }
+                } message: { Text(store.message ?? "") }
+                .task { await store.reconcileActivity(); await store.refresh() }
+                .onChange(of: phase) { _, new in if new == .active { Task { await store.reconcileActivity() } } }
+                .overlay {
+                    if phase != .active {
+                        ZStack { Palette.background.ignoresSafeArea(); Image(systemName: "graduationcap.fill").font(.system(size: 60)).foregroundStyle(Palette.accent) }
+                    }
+                }
         }
     }
 }
 
-enum Theme {
-    static let accent = Color(red: 0.08, green: 0.39, blue: 0.78)
-    static let violet = Color(red: 0.45, green: 0.36, blue: 0.83)
-    static let mint = Color(red: 0.04, green: 0.65, blue: 0.55)
-    static let paper = Color(uiColor: .systemGroupedBackground)
+enum Palette {
+    static let accent = Color(red: 0.05, green: 0.48, blue: 0.39)
+    static let ink = Color(red: 0.04, green: 0.17, blue: 0.17)
+    static let background = Color(uiColor: .systemGroupedBackground)
+    static let card = Color(uiColor: .secondarySystemGroupedBackground)
+    static let tones: [Color] = [accent, .indigo, .orange, .blue]
 }
-
-struct Lesson: Identifiable {
-    let id = UUID()
-    let subject: String
-    let kind: String
-    let start: String
-    let end: String
-    let room: String
-    let lecturer: String
-    let weekday: Int // Monday = 1
-    let color: Color
-}
-
-struct Grade: Identifiable {
-    let id = UUID()
-    let subject: String
-    let value: String
-    let ects: Int
-    let date: String
-    let lecturer: String
-}
-
-struct Registration: Identifiable {
-    let id: String
-    let title: String
-    let details: String
-    let deadline: String
-    let capacity: String
-}
-
-@MainActor final class DemoStore: ObservableObject {
-    @Published var enrolled: Set<String> = ["finance"] {
-        didSet { UserDefaults.standard.set(Array(enrolled), forKey: "demo.enrolled") }
+struct Card<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        content.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Palette.card, in: RoundedRectangle(cornerRadius: 26))
     }
-    @Published var notificationsEnabled = true
-    @Published var showOnlyUpcoming = false
-    @Published var completedSurveys: Set<String> = [] {
-        didSet { UserDefaults.standard.set(Array(completedSurveys), forKey: "demo.surveys") }
-    }
-
-    init() {
-        if let saved = UserDefaults.standard.stringArray(forKey: "demo.enrolled") { enrolled = Set(saved) }
-        if let saved = UserDefaults.standard.stringArray(forKey: "demo.surveys") { completedSurveys = Set(saved) }
-    }
-
-    let lessons: [Lesson] = [
-        .init(subject: "Mikroekonomia", kind: "Wykład", start: "08:00", end: "09:30", room: "Aula I", lecturer: "dr Anna Kowalska", weekday: 1, color: Theme.accent),
-        .init(subject: "Statystyka", kind: "Ćwiczenia", start: "10:00", end: "11:30", room: "B-201", lecturer: "dr Piotr Nowak", weekday: 1, color: Theme.violet),
-        .init(subject: "Finanse przedsiębiorstw", kind: "Ćwiczenia", start: "12:00", end: "13:30", room: "G-152", lecturer: "dr Marta Zielińska", weekday: 2, color: Theme.mint),
-        .init(subject: "Makroekonomia", kind: "Wykład", start: "09:50", end: "11:20", room: "Aula VII", lecturer: "prof. Jan Wiśniewski", weekday: 3, color: Theme.accent),
-        .init(subject: "Język angielski", kind: "Lektorat", start: "13:40", end: "15:10", room: "C-105", lecturer: "mgr Alex Smith", weekday: 3, color: Theme.violet),
-        .init(subject: "Prawo gospodarcze", kind: "Wykład", start: "11:40", end: "13:10", room: "Aula II", lecturer: "dr Katarzyna Mazur", weekday: 4, color: Theme.mint),
-        .init(subject: "Matematyka", kind: "Ćwiczenia", start: "08:00", end: "09:30", room: "B-114", lecturer: "dr Tomasz Lewandowski", weekday: 5, color: Theme.violet)
-    ]
-    let grades: [Grade] = [
-        .init(subject: "Podstawy zarządzania", value: "5,0", ects: 5, date: "24.06.2026", lecturer: "dr A. Nowak"),
-        .init(subject: "Geografia ekonomiczna", value: "4,5", ects: 4, date: "18.06.2026", lecturer: "prof. M. Wiśniewska"),
-        .init(subject: "Socjologia", value: "5,0", ects: 3, date: "12.06.2026", lecturer: "dr P. Lewicki"),
-        .init(subject: "Matematyka I", value: "4,0", ects: 6, date: "06.06.2026", lecturer: "dr K. Marek"),
-        .init(subject: "Podstawy ekonomii", value: "4,5", ects: 6, date: "03.06.2026", lecturer: "dr J. Wójcik")
-    ]
-    let registrations: [Registration] = [
-        .init(id: "finance", title: "Finanse przedsiębiorstw", details: "Ćwiczenia • grupa 12 • wt. 12:00", deadline: "20 listopada", capacity: "18 / 25 miejsc"),
-        .init(id: "marketing", title: "Marketing", details: "Ćwiczenia • grupa 04 • czw. 10:00", deadline: "20 listopada", capacity: "21 / 25 miejsc"),
-        .init(id: "strategy", title: "Zarządzanie strategiczne", details: "Konwersatorium • grupa 07 • pt. 12:00", deadline: "22 listopada", capacity: "14 / 20 miejsc")
-    ]
-
-    var weightedAverage: String {
-        let numerator = grades.reduce(0.0) { result, grade in
-            result + (Double(grade.value.replacingOccurrences(of: ",", with: ".")) ?? 0) * Double(grade.ects)
-        }
-        let denominator = grades.reduce(0) { $0 + $1.ects }
-        return String(format: "%.2f", denominator == 0 ? 0 : numerator / Double(denominator)).replacingOccurrences(of: ".", with: ",")
-    }
-    var earnedECTS: Int { grades.reduce(0) { $0 + $1.ects } }
 }
-
+struct Eyebrow: View {
+    let text: String
+    var body: some View { Text(text.uppercased()).font(.system(size: 11, weight: .bold, design: .rounded)).tracking(2).foregroundStyle(.secondary) }
+}
+struct SourceBadge: View {
+    @EnvironmentObject var store: CampusStore
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(store.isDemo ? Color.orange : Palette.accent).frame(width: 6, height: 6)
+            Text(store.isDemo ? "PODGLĄD · DANE DEMO" : "USOS SGH · ZAPIS LOKALNY")
+                .font(.system(size: 9, weight: .bold)).tracking(1)
+        }.padding(.horizontal, 12).padding(.vertical, 9).glassEffect(.regular, in: .capsule)
+    }
+}
 struct RootView: View {
     @State private var selection = 0
     var body: some View {
         TabView(selection: $selection) {
-            DashboardView().tabItem { Label("Pulpit", systemImage: "house.fill") }.tag(0)
-            TimetableView().tabItem { Label("Plan", systemImage: "calendar") }.tag(1)
-            GradesView().tabItem { Label("Oceny", systemImage: "graduationcap.fill") }.tag(2)
-            RegistrationsView().tabItem { Label("Zapisy", systemImage: "square.stack.3d.up.fill") }.tag(3)
-            MoreView().tabItem { Label("Więcej", systemImage: "ellipsis.circle.fill") }.tag(4)
+            Tab("Dzisiaj", systemImage: "sun.max", value: 0) { TodayView() }
+            Tab("Plan", systemImage: "calendar", value: 1) { ScheduleView() }
+            Tab("Oceny", systemImage: "chart.bar.xaxis", value: 2) { GradesView() }
+            Tab("Konto", systemImage: "person.crop.circle", value: 3) { AccountView() }
+        }
+        .onOpenURL { url in if url.scheme == "usosglass", url.host == "today" { selection = 0 } }
+    }
+}
+struct WelcomeView: View {
+    let done: () -> Void
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                Image(systemName: "graduationcap.fill").font(.system(size: 54)).foregroundStyle(Palette.accent)
+                    .padding(26).background(Palette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 32))
+                VStack(alignment: .leading, spacing: 12) {
+                    Eyebrow(text: "USOS GLASS / SGH")
+                    Text("Mniej szukania.\nWięcej studiowania.").font(.system(size: 38, weight: .bold, design: .rounded)).tracking(-1.5)
+                    Text("Twój plan, oceny i najbliższe zajęcia — w jednym spokojnym miejscu.").font(.title3).foregroundStyle(.secondary)
+                }
+                Label("Zajęcia na Dynamic Island", systemImage: "waveform.path")
+                Label("Plan dostępny również offline", systemImage: "wifi.slash")
+                Label("Logowanie na stronie uczelni", systemImage: "lock.shield")
+                Text("Nieoficjalny klient. Na początek zobaczysz dane demo. Prawdziwe dane wymagają klucza aplikacji USOS SGH i autoryzacji w zakładce Konto.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button(action: done) { Text("Odkryj aplikację").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12) }
+                    .buttonStyle(.glassProminent)
+            }.padding(28).padding(.top, 26)
+        }.background(Palette.background).interactiveDismissDisabled()
+    }
+}
+struct TodayView: View {
+    @EnvironmentObject var store: CampusStore
+    @State private var showTask = false
+    @State private var detail: CampusEvent?
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack { Eyebrow(text: CampusTime.string(Date(), "EEEE, d MMMM")); Spacer(); Image(systemName: "sparkle").foregroundStyle(Palette.accent) }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(store.displayName + ".").font(.system(size: 38, weight: .bold, design: .rounded)).tracking(-1.5)
+                        Text(store.isDemo ? "Zobacz, jak może wyglądać Twój dzień." : "Wszystko, czego potrzebujesz na uczelni.").foregroundStyle(.secondary)
+                    }
+                    SourceBadge()
+                    if let next = store.nextEvent {
+                        Button { detail = next } label: { NextClassHero(event: next) }.buttonStyle(.plain)
+                    } else {
+                        Card {
+                            Label("Masz chwilę dla siebie", systemImage: "leaf").font(.title2.bold())
+                            Text("Brak nadchodzących zajęć w pobranym tygodniu. Sprawdź kolejny tydzień w Planie.").foregroundStyle(.secondary).padding(.top, 8)
+                        }
+                    }
+                    HStack(spacing: 12) {
+                        Metric(value: "\(store.events.filter { CampusTime.calendar.isDate($0.start, inSameDayAs: Date()) }.count)", label: "zajęcia dzisiaj", icon: "calendar", tint: Palette.accent)
+                        Metric(value: "\(store.tasks.filter { !$0.done }.count)", label: "Twoje zadania", icon: "checkmark.circle", tint: .indigo)
+                    }
+                    HStack { Text("Twoje zadania").font(.title2.bold()); Spacer(); Button { showTask = true } label: { Image(systemName: "plus").frame(width: 36, height: 36) }.buttonStyle(.glass).accessibilityLabel("Dodaj zadanie") }
+                    if store.tasks.isEmpty {
+                        Card {
+                            Label("Miejsce na Twój następny krok", systemImage: "checklist").font(.headline)
+                            Text("Dodaj kolokwium, projekt albo przypomnienie o nauce. Zadania zapisują się tylko na telefonie.").font(.subheadline).foregroundStyle(.secondary).padding(.top, 6)
+                        }
+                    } else {
+                        VStack(spacing: 10) {
+                            ForEach(store.tasks.sorted { $0.due < $1.due }) { item in
+                                TaskRow(item: item)
+                            }
+                        }
+                    }
+                    HStack {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Text(store.refreshed.map { "Ostatnia synchronizacja: " + CampusTime.string($0, "d MMM, HH:mm") } ?? "Dane przykładowe · połącz konto w zakładce Konto")
+                    }.font(.caption).foregroundStyle(.secondary)
+                }.padding(20).padding(.bottom, 24)
+            }.background(Palette.background)
+                .navigationTitle("USOS Glass").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { if store.busy { ProgressView() } else { Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }.disabled(store.isDemo).accessibilityLabel("Odśwież dane USOS") } } }
+                .refreshable { await store.refresh() }
+                .sheet(isPresented: $showTask) { AddTaskView() }
+                .sheet(item: $detail) { EventDetail(event: $0) }
         }
     }
 }
-
-struct DemoLabel: View {
+struct NextClassHero: View {
+    let event: CampusEvent
     var body: some View {
-        Label("TRYB DEMO · DANE PRZYKŁADOWE", systemImage: "sparkles")
-            .font(.system(size: 10, weight: .bold, design: .rounded))
-            .tracking(0.4)
-            .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 24) {
+            HStack {
+                Label(event.isDemo ? "NAJBLIŻSZE · DEMO" : "NAJBLIŻSZE ZAJĘCIA", systemImage: "circle.inset.filled").font(.system(size: 10, weight: .bold)).tracking(1.3)
+                Spacer(); Image(systemName: "arrow.up.right").font(.headline)
+            }.foregroundStyle(.white.opacity(0.8))
+            Text(event.title).font(.system(size: 29, weight: .bold, design: .rounded)).tracking(-0.6).fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(CampusTime.string(event.start, "EEE, d MMM")).font(.caption).foregroundStyle(.white.opacity(0.65))
+                    Text(event.timeRange).font(.title2.bold().monospacedDigit())
+                }
+                Spacer()
+                Text(event.room.isEmpty ? event.kind : "Sala \(event.room)").font(.subheadline.bold()).padding(12)
+                    .background(.white.opacity(0.12), in: Capsule())
+            }
+        }.foregroundStyle(.white).padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                ZStack(alignment: .topTrailing) {
+                    LinearGradient(colors: [Palette.ink, Color(red: 0.08, green: 0.36, blue: 0.30)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Circle().stroke(.white.opacity(0.06), lineWidth: 45).frame(width: 230, height: 230).offset(x: 90, y: -85)
+                    Circle().stroke(.white.opacity(0.05), lineWidth: 2).frame(width: 290, height: 290).offset(x: 60, y: -55)
+                }.clipShape(RoundedRectangle(cornerRadius: 30))
+            }
     }
 }
-
-struct Surface<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
+struct Metric: View {
+    let value: String; let label: String; let icon: String; let tint: Color
     var body: some View {
-        content
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(17)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 23, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 23).strokeBorder(.primary.opacity(0.045)))
-    }
-}
-
-struct SectionTitle: View {
-    let title: String
-    var body: some View {
-        Text(title).font(.title3.weight(.bold)).padding(.top, 5)
-    }
-}
-
-struct StatTile: View {
-    let value: String
-    let label: String
-    let icon: String
-    let color: Color
-    var body: some View {
-        Surface {
-            VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: icon).foregroundStyle(color).font(.title3)
-                Text(value).font(.system(size: 29, weight: .bold, design: .rounded)).minimumScaleFactor(0.7)
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                Image(systemName: icon).foregroundStyle(tint)
+                Text(value).font(.system(size: 32, weight: .bold, design: .rounded)).minimumScaleFactor(0.6).lineLimit(1)
                 Text(label).font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 }
-
-struct DashboardView: View {
-    @EnvironmentObject private var store: DemoStore
+struct TaskRow: View {
+    @EnvironmentObject var store: CampusStore
+    let item: StudyTask
+    var body: some View {
+        HStack(spacing: 12) {
+            Button { store.toggleTask(item.id) } label: { Image(systemName: item.done ? "checkmark.circle.fill" : "circle").font(.title2).frame(width: 44, height: 44) }
+                .accessibilityLabel(item.done ? "Oznacz jako niezrobione" : "Ukończ zadanie")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.title).font(.subheadline.weight(.semibold)).strikethrough(item.done).foregroundStyle(item.done ? .secondary : .primary)
+                Text(CampusTime.string(item.due, "d MMM, HH:mm")).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Menu { Button("Usuń zadanie", role: .destructive) { store.deleteTask(item.id) } } label: { Image(systemName: "ellipsis").frame(width: 36, height: 44) }.accessibilityLabel("Opcje zadania")
+        }.padding(12).background(Palette.card, in: RoundedRectangle(cornerRadius: 20))
+    }
+}
+struct AddTaskView: View {
+    @EnvironmentObject var store: CampusStore
+    @Environment(\.dismiss) var dismiss
+    @State private var title = ""
+    @State private var due = Date().addingTimeInterval(86400)
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Co chcesz zrobić?") { TextField("Np. powtórzyć rozdział 2", text: $title); DatePicker("Termin", selection: $due) }
+                Section { Text("Prywatne zadanie lokalne. Nie trafia do USOS i nie wysyła powiadomienia.").font(.footnote).foregroundStyle(.secondary) }
+            }.navigationTitle("Nowe zadanie").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Anuluj") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button("Dodaj") { store.addTask(title: title, due: due); dismiss() }.disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                }
+        }.presentationDetents([.medium, .large])
+    }
+}
+struct ScheduleView: View {
+    @EnvironmentObject var store: CampusStore
+    @State private var selected = CampusTime.calendar.startOfDay(for: Date())
+    @State private var detail: CampusEvent?
+    private var days: [Date] { (0..<7).map { CampusTime.calendar.date(byAdding: .day, value: $0, to: store.weekStart)! } }
+    private var selectedEvents: [CampusEvent] { store.events.filter { CampusTime.calendar.isDate($0.start, inSameDayAs: selected) } }
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    DemoLabel()
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Dzień dobry 👋").font(.largeTitle.bold())
-                        Text("Twój semestr w jednym miejscu.").foregroundStyle(.secondary)
-                    }
-                    Surface {
-                        HStack(spacing: 14) {
-                            Image(systemName: "building.columns.fill")
-                                .font(.title).foregroundStyle(Theme.accent)
-                                .frame(width: 54, height: 54)
-                                .background(Theme.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("Szkoła Główna Handlowa").font(.headline)
-                                Text("Studia licencjackie · Semestr zimowy").font(.subheadline).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    HStack(spacing: 12) {
-                        StatTile(value: store.weightedAverage, label: "Średnia ważona", icon: "chart.line.uptrend.xyaxis", color: Theme.violet)
-                        StatTile(value: "\(store.earnedECTS)", label: "Zdobyte ECTS (demo)", icon: "checkmark.seal.fill", color: Theme.mint)
-                    }
-                    SectionTitle(title: "Najbliższe zajęcia")
-                    ForEach(store.lessons.prefix(2)) { lesson in LessonCard(lesson: lesson) }
-                    SectionTitle(title: "Ważne terminy")
-                    Surface {
-                        VStack(spacing: 15) {
-                            HStack(spacing: 13) {
-                                Image(systemName: "calendar.badge.clock").font(.title2).foregroundStyle(Theme.accent)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("Rejestracja na zajęcia").font(.subheadline.weight(.semibold))
-                                    Text("20 listopada · termin demonstracyjny").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                            Divider()
-                            HStack(spacing: 13) {
-                                Image(systemName: "doc.text.magnifyingglass").font(.title2).foregroundStyle(Theme.violet)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("Ankiety dydaktyczne").font(.subheadline.weight(.semibold))
-                                    Text("Przykładowa ankieta do wypełnienia").font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                        }
-                    }
-                }
-                .padding(18)
-            }
-            .background(Theme.paper)
-            .navigationTitle("USOS SGH")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink { ProfileView() } label: {
-                        Image(systemName: "person.crop.circle.fill").font(.title2)
-                    }
-                    .buttonStyle(.glass)
-                }
-            }
-        }
-    }
-}
-
-struct LessonCard: View {
-    let lesson: Lesson
-    var body: some View {
-        Surface {
-            HStack(spacing: 14) {
-                RoundedRectangle(cornerRadius: 3).fill(lesson.color).frame(width: 4)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(lesson.subject).font(.headline)
-                    Text("\(lesson.kind) · \(lesson.lecturer)").font(.caption).foregroundStyle(.secondary)
-                    Label(lesson.room, systemImage: "mappin.and.ellipse").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(lesson.start).font(.subheadline.weight(.bold).monospacedDigit())
-                    Text(lesson.end).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-struct TimetableView: View {
-    @EnvironmentObject private var store: DemoStore
-    @State private var weekday = 1
-    private let days = Array(1...7)
-    private let labels = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Nd"]
-    private var matching: [Lesson] { store.lessons.filter { $0.weekday == weekday } }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    DemoLabel()
-                    Text("Tydzień akademicki").font(.title2.weight(.bold))
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        GlassEffectContainer(spacing: 8) {
-                            HStack(spacing: 9) {
-                                ForEach(days, id: \.self) { day in
-                                    Button {
-                                        withAnimation(.snappy) { weekday = day }
-                                    } label: {
-                                        Text(labels[day - 1])
-                                            .font(.subheadline.weight(.semibold))
-                                            .frame(width: 43, height: 46)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .glassEffect(weekday == day ? .regular.tint(Theme.accent.opacity(0.25)).interactive() : .regular, in: .rect(cornerRadius: 16))
-                                }
-                            }
-                        }
-                    }
+                VStack(alignment: .leading, spacing: 24) {
+                    SourceBadge()
                     HStack {
-                        SectionTitle(title: labels[weekday - 1])
-                        Spacer()
-                        Text("\(matching.count) zajęcia").font(.caption).foregroundStyle(.secondary)
+                        Button { Task { await store.changeWeek(by: -1); selected = store.weekStart } } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }.disabled(store.busy).accessibilityLabel("Poprzedni tydzień")
+                        Spacer(); Text(CampusTime.string(store.weekStart, "d MMM") + " – " + CampusTime.string(days.last!, "d MMM yyyy")).font(.headline); Spacer()
+                        Button { Task { await store.changeWeek(by: 1); selected = store.weekStart } } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }.disabled(store.busy).accessibilityLabel("Następny tydzień")
                     }
-                    if matching.isEmpty {
-                        ContentUnavailableView("Brak zajęć", systemImage: "sun.max", description: Text("Ten dzień jest wolny w przykładowym planie."))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(days, id: \.self) { day in
+                                Button { selected = day } label: {
+                                    VStack(spacing: 10) {
+                                        Text(CampusTime.string(day, "EEEEE").uppercased()).font(.caption2.bold())
+                                        Text(CampusTime.string(day, "d")).font(.title3.bold())
+                                        Circle().fill(store.events.contains { CampusTime.calendar.isDate($0.start, inSameDayAs: day) } ? Color.primary : Color.clear).frame(width: 4, height: 4)
+                                    }.frame(width: 44).padding(.vertical, 14)
+                                        .foregroundStyle(CampusTime.calendar.isDate(day, inSameDayAs: selected) ? Color.white : Color.primary)
+                                        .background(CampusTime.calendar.isDate(day, inSameDayAs: selected) ? Palette.accent : Palette.card, in: Capsule())
+                                }.buttonStyle(.plain).accessibilityLabel(CampusTime.string(day, "EEEE, d MMMM"))
+                            }
+                        }
+                    }
+                    HStack { Text(CampusTime.string(selected, "EEEE").capitalized).font(.title2.bold()); Spacer(); Text("\(selectedEvents.count) zajęć").font(.subheadline).foregroundStyle(.secondary) }
+                    if store.busy { ProgressView("Synchronizuję plan…").frame(maxWidth: .infinity).padding(30) }
+                    else if selectedEvents.isEmpty {
+                        ContentUnavailableView("Wolna przestrzeń", systemImage: "cup.and.saucer", description: Text("Brak zajęć w zapisanym planie na ten dzień."))
                     } else {
-                        ForEach(matching) { LessonCard(lesson: $0) }
+                        VStack(spacing: 14) {
+                            ForEach(selectedEvents) { event in
+                                Button { detail = event } label: { EventRow(event: event) }.buttonStyle(.plain)
+                            }
+                        }
                     }
-                    Surface {
-                        Label("Plan jest przykładowy i nie jest połączony z Twoim kontem SGH.", systemImage: "info.circle")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
-                .padding(18)
-            }
-            .background(Theme.paper)
-            .navigationTitle("Plan zajęć")
+                    Button { Task { await store.scheduleReminders() } } label: { Label("Przypomnij 15 min przed zajęciami", systemImage: "bell.badge").frame(maxWidth: .infinity).padding(.vertical, 8) }.buttonStyle(.glass)
+                    Text("Godziny według strefy Warszawy. Przypomnienia obejmują tylko wyświetlany tydzień i wymagają ponownego ustawienia po zmianach planu.").font(.caption).foregroundStyle(.secondary)
+                }.padding(20)
+            }.background(Palette.background).navigationTitle("Twój tydzień")
+                .refreshable { await store.refresh() }
+                .sheet(item: $detail) { EventDetail(event: $0) }
+                .onAppear { if !days.contains(where: { CampusTime.calendar.isDate($0, inSameDayAs: selected) }) { selected = store.weekStart } }
         }
     }
 }
-
+struct EventRow: View {
+    let event: CampusEvent
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(CampusTime.string(event.start, "HH:mm")).font(.headline.monospacedDigit())
+                Text(CampusTime.string(event.end, "HH:mm")).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }.frame(width: 52, alignment: .leading)
+            RoundedRectangle(cornerRadius: 3).fill(Palette.tones[event.tintIndex]).frame(width: 4)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(event.kind.uppercased()).font(.system(size: 9, weight: .bold)).tracking(1.3).foregroundStyle(Palette.tones[event.tintIndex])
+                Text(event.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                Label(event.location.isEmpty ? "Sala niepodana" : event.location, systemImage: "mappin").font(.caption).foregroundStyle(.secondary)
+                if event.tentative { Text("Termin do potwierdzenia w USOS").font(.caption2).foregroundStyle(.orange) }
+            }
+            Spacer(minLength: 0)
+        }.padding(18).background(Palette.card, in: RoundedRectangle(cornerRadius: 24)).fixedSize(horizontal: false, vertical: true)
+    }
+}
+struct EventDetail: View {
+    @EnvironmentObject var store: CampusStore
+    @Environment(\.dismiss) var dismiss
+    let event: CampusEvent
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    NextClassHero(event: event)
+                    Card {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Label(CampusTime.string(event.start, "EEEE, d MMMM yyyy"), systemImage: "calendar")
+                            Label(event.kind, systemImage: "books.vertical")
+                            Label(event.location.isEmpty ? "Lokalizacja niepodana" : event.location, systemImage: "mappin.and.ellipse")
+                            if event.tentative { Label("Potwierdź termin w USOS — spotkanie może być nieregularne.", systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
+                        }.font(.subheadline)
+                    }
+                    Button { Task { await store.startActivity(event) } } label: { Label("Pokaż na Dynamic Island", systemImage: "waveform.path").frame(maxWidth: .infinity).padding(.vertical, 10) }.buttonStyle(.glassProminent)
+                    Text("Uruchom maksymalnie godzinę przed zajęciami. Sala i odliczanie pojawią się też na ekranie blokady. Zmiany planu nie aktualizują się w tle.").font(.footnote).foregroundStyle(.secondary)
+                }.padding(20)
+            }.background(Palette.background).navigationTitle("Szczegóły zajęć").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Gotowe") { dismiss() } } }
+        }
+    }
+}
 struct GradesView: View {
-    @EnvironmentObject private var store: DemoStore
-    @State private var selectedGrade: Grade?
+    @EnvironmentObject var store: CampusStore
+    @State private var search = ""
+    @State private var term = "Wszystkie"
+    private var terms: [String] { ["Wszystkie"] + Array(Set(store.grades.map(\.term))).sorted().reversed() }
+    private var filtered: [CampusGrade] { store.grades.filter { (term == "Wszystkie" || $0.term == term) && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) } }
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    DemoLabel()
+                VStack(alignment: .leading, spacing: 22) {
+                    SourceBadge()
                     HStack(spacing: 12) {
-                        StatTile(value: store.weightedAverage, label: "Średnia ważona ECTS", icon: "chart.bar.fill", color: Theme.accent)
-                        StatTile(value: "\(store.earnedECTS)", label: "Suma punktów ECTS", icon: "graduationcap.fill", color: Theme.mint)
+                        Metric(value: store.average, label: "średnia wyświetlonych ocen*", icon: "chart.xyaxis.line", tint: Palette.accent)
+                        Metric(value: "\(store.grades.filter(\.passes).count)", label: "ocen zaliczających", icon: "checkmark.seal", tint: .indigo)
                     }
-                    SectionTitle(title: "Historia ocen")
-                    ForEach(store.grades) { grade in
-                        Button { selectedGrade = grade } label: {
-                            Surface {
-                                HStack(spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        Text(grade.subject).font(.headline).foregroundStyle(.primary)
-                                        Text("\(grade.ects) ECTS · \(grade.date)").font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Text(grade.value)
-                                        .font(.title3.bold().monospacedDigit())
-                                        .foregroundStyle(Theme.accent)
-                                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+                    Text("*Orientacyjna średnia arytmetyczna wszystkich pobranych ocen liczbowych z ostatnich 365 dni, także poprawek. Nie jest oficjalną średnią SGH ani średnią ważoną ECTS.").font(.caption).foregroundStyle(.secondary)
+                    Picker("Cykl dydaktyczny", selection: $term) { ForEach(terms, id: \.self) { Text($0).tag($0) } }.pickerStyle(.menu)
+                    if filtered.isEmpty { ContentUnavailableView("Brak ocen", systemImage: "graduationcap", description: Text("Brak wyników dla wybranego filtra w pobranych danych.")) }
+                    ForEach(filtered) { grade in
+                        Card {
+                            HStack(spacing: 16) {
+                                Text(grade.value_symbol).font(.system(size: 27, weight: .bold, design: .rounded))
+                                    .foregroundStyle(grade.passes ? Palette.accent : Color.red)
+                                    .frame(minWidth: 54, minHeight: 54)
+                                    .background((grade.passes ? Palette.accent : Color.red).opacity(0.09), in: RoundedRectangle(cornerRadius: 16))
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(grade.title).font(.headline)
+                                    Text(grade.term + " · termin " + grade.exam_session_number.value).font(.caption).foregroundStyle(.secondary)
+                                    if let date = grade.date_modified { Text("Aktualizacja: " + date).font(.caption2).foregroundStyle(.secondary) }
                                 }
+                                Spacer(minLength: 0)
                             }
-                        }.buttonStyle(.plain)
+                        }
                     }
-                    Text("Średnia to obliczenie demonstracyjne ważone punktami ECTS; oficjalna metodologia uczelni może być inna.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }.padding(18)
-            }
-            .background(Theme.paper)
-            .navigationTitle("Oceny")
-            .sheet(item: $selectedGrade) { grade in
-                NavigationStack {
-                    Form {
-                        LabeledContent("Przedmiot", value: grade.subject)
-                        LabeledContent("Ocena", value: grade.value)
-                        LabeledContent("ECTS", value: "\(grade.ects)")
-                        LabeledContent("Data", value: grade.date)
-                        LabeledContent("Prowadzący", value: grade.lecturer)
-                        Section { DemoLabel() }
-                    }
-                    .navigationTitle("Szczegóły oceny")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Gotowe") { selectedGrade = nil } } }
-                }
-            }
+                }.padding(20)
+            }.background(Palette.background).navigationTitle("Twoje wyniki")
+                .searchable(text: $search, prompt: "Znajdź przedmiot")
+                .refreshable { await store.refresh() }
+                .onChange(of: store.isDemo) { _, _ in term = "Wszystkie" }
         }
     }
 }
-
-struct RegistrationsView: View {
-    @EnvironmentObject private var store: DemoStore
-    @State private var pending: Registration?
-    @State private var showResult = false
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    DemoLabel()
-                    Surface {
-                        HStack(spacing: 12) {
-                            Image(systemName: "clock.badge.checkmark").font(.title2).foregroundStyle(Theme.mint)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Rejestracja demonstracyjna").font(.headline)
-                                Text("Zmiany zapisów są lokalne. Nie trafiają do USOS.").font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    SectionTitle(title: "Dostępne grupy")
-                    ForEach(store.registrations) { registration in
-                        Surface {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text(registration.title).font(.headline)
-                                Text(registration.details).font(.subheadline).foregroundStyle(.secondary)
-                                HStack {
-                                    Label(registration.capacity, systemImage: "person.2")
-                                    Spacer()
-                                    Label(registration.deadline, systemImage: "calendar")
-                                }.font(.caption).foregroundStyle(.secondary)
-                                Button {
-                                    pending = registration
-                                } label: {
-                                    Label(store.enrolled.contains(registration.id) ? "Wypisz (demo)" : "Zapisz (demo)", systemImage: store.enrolled.contains(registration.id) ? "minus.circle" : "plus.circle.fill")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.glassProminent)
-                            }
-                        }
-                    }
-                }.padding(18)
-            }
-            .background(Theme.paper)
-            .navigationTitle("Rejestracje")
-            .confirmationDialog("Operacja demonstracyjna", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
-                Button("Potwierdź lokalną zmianę") {
-                    if let registration = pending {
-                        if store.enrolled.contains(registration.id) {
-                            store.enrolled.remove(registration.id)
-                        } else {
-                            store.enrolled.insert(registration.id)
-                        }
-                    }
-                    pending = nil
-                    showResult = true
-                }
-                Button("Anuluj", role: .cancel) { pending = nil }
-            } message: {
-                Text("Nie zostanie wysłane żadne żądanie do USOS SGH.")
-            }
-            .alert("Zapisano w prototypie", isPresented: $showResult) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text("Stan zapisano wyłącznie lokalnie na tym urządzeniu, bez połączenia z SGH.")
-            }
-        }
-    }
-}
-
-struct MoreView: View {
+struct AccountView: View {
+    @EnvironmentObject var store: CampusStore
+    @AppStorage("appearance") private var appearance = "system"
+    @State private var showLogin = false
+    @State private var confirmLogout = false
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    NavigationLink { ExamsView() } label: { Label("Egzaminy i zaliczenia", systemImage: "pencil.and.list.clipboard") }
-                    NavigationLink { PaymentsView() } label: { Label("Płatności", systemImage: "creditcard") }
-                    NavigationLink { SurveysView() } label: { Label("Ankiety", systemImage: "checklist") }
-                    NavigationLink { AcademicProgressView() } label: { Label("Tok studiów", systemImage: "books.vertical") }
-                } header: { Text("Studia") }
-                Section {
-                    NavigationLink { ProfileView() } label: { Label("Profil studenta", systemImage: "person.crop.circle") }
-                    NavigationLink { SettingsView() } label: { Label("Ustawienia", systemImage: "gearshape") }
-                } header: { Text("Konto") }
-                Section {
-                    Link(destination: URL(string: "https://usosapps.sgh.waw.pl/developers/api/")!) {
-                        Label("Dokumentacja USOS API SGH", systemImage: "link")
+                    HStack(spacing: 16) {
+                        Image(systemName: "person.crop.circle.fill").font(.system(size: 52)).foregroundStyle(Palette.accent)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(store.student?.fullName ?? "Twój profil SGH").font(.headline)
+                            Text(store.hasConnection ? "Połączono z USOS SGH" : "Oglądasz dane demonstracyjne").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.padding(.vertical, 8)
+                    if !store.hasConnection { Button("Połącz z USOS SGH") { showLogin = true } }
+                    else { Button("Synchronizuj dane") { Task { await store.refresh() } }.disabled(store.busy) }
+                }
+                Section("Dynamic Island") {
+                    Button { Task { await store.demoActivity() } } label: { Label("Testuj odliczanie · demo 15 min", systemImage: "waveform.path") }
+                    Button { Task { await store.endActivities() } } label: { Label("Zakończ aktywność", systemImage: "stop.circle") }
+                    Text("Wybierz zajęcia w Planie, aby uruchomić ich aktywność. W AltStore zachowaj rozszerzenie aplikacji. Po upływie czasu widok staje się nieaktualny; po powrocie do aplikacji zostanie usunięty.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Wygląd") {
+                    Picker("Motyw", selection: $appearance) {
+                        Text("Systemowy").tag("system"); Text("Jasny").tag("light"); Text("Ciemny").tag("dark")
                     }
-                    Label("Wersja 0.1 · prototyp offline", systemImage: "info.circle")
-                } header: { Text("O aplikacji") }
-            }
-            .navigationTitle("Więcej")
+                }
+                Section("Prywatność i powiadomienia") {
+                    Label("Tokeny w pęku kluczy iPhone’a", systemImage: "lock.shield")
+                    Label("Brak reklam i analityki", systemImage: "hand.raised")
+                    Button("Usuń zaplanowane przypomnienia") { Task { await store.clearReminders(); store.message = "Usunięto przypomnienia aplikacji." } }
+                    if store.hasConnection { Button("Wyloguj i usuń dane lokalne", role: .destructive) { confirmLogout = true }.disabled(store.busy) }
+                }
+                Section("Uczelnia") {
+                    Link("Otwórz USOSweb SGH", destination: URL(string: "https://usosweb.sgh.waw.pl/")!)
+                    Link("Zarządzaj dostępem w USOSapps", destination: URL(string: USOSClient.base)!)
+                }
+                Section {
+                    Text("USOS Glass 0.2 · niezależny klient studencki. Integracja wymaga własnego klucza USOS SGH. Rejestracje, płatności i ankiety obsługuj w USOSweb. Aplikacja pobiera profil, tygodniowy plan oraz oceny zmienione w ostatnim roku.").font(.footnote).foregroundStyle(.secondary)
+                }
+            }.navigationTitle("Po Twojemu")
+                .sheet(isPresented: $showLogin) { LoginView() }
+                .confirmationDialog("Wylogować i usunąć plan, oceny oraz zadania z tego telefonu?", isPresented: $confirmLogout, titleVisibility: .visible) {
+                    Button("Wyloguj i usuń", role: .destructive) { Task { await store.logout() } }
+                }
         }
     }
 }
-
-struct ExamsView: View {
+struct LoginView: View {
+    @EnvironmentObject var store: CampusStore
+    @Environment(\.dismiss) var dismiss
+    @State private var key = ""
+    @State private var secret = ""
+    @State private var pin = ""
     var body: some View {
-        List {
-            Section("Przykładowe terminy") {
-                DetailLine(title: "Statystyka", subtitle: "Egzamin pisemny · 22.01.2027, 09:00", icon: "doc.text")
-                DetailLine(title: "Makroekonomia", subtitle: "Egzamin pisemny · 29.01.2027, 11:00", icon: "doc.text")
-                DetailLine(title: "Prawo gospodarcze", subtitle: "Zaliczenie · 03.02.2027, 12:00", icon: "checkmark.circle")
-            }
-            Section { DemoLabel() }
-        }.navigationTitle("Egzaminy")
-    }
-}
-
-struct PaymentsView: View {
-    var body: some View {
-        List {
-            Section {
-                LabeledContent("Saldo przykładowe") { Text("0,00 zł").font(.title3.bold()).foregroundStyle(Theme.mint) }
-            }
-            Section("Historia demonstracyjna") {
-                DetailLine(title: "Brak zaległości", subtitle: "Brak prawdziwego połączenia z kontem", icon: "checkmark.shield")
-            }
-            Section { Text("W prototypie nie można wykonywać płatności ani sprawdzać rzeczywistego salda.").font(.footnote) }
-        }.navigationTitle("Płatności")
-    }
-}
-
-struct SurveysView: View {
-    @EnvironmentObject private var store: DemoStore
-    var body: some View {
-        List {
-            Section("Ankiety demonstracyjne") {
-                ForEach(["Ocena zajęć – Mikroekonomia", "Ocena zajęć – Statystyka"], id: \.self) { title in
-                    Button {
-                        if store.completedSurveys.contains(title) { store.completedSurveys.remove(title) }
-                        else { store.completedSurveys.insert(title) }
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(title).foregroundStyle(.primary)
-                                Text(store.completedSurveys.contains(title) ? "Oznaczono lokalnie" : "Dotknij, aby oznaczyć jako ukończoną").font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: store.completedSurveys.contains(title) ? "checkmark.circle.fill" : "circle")
-                        }
+        NavigationStack {
+            Form {
+                Section {
+                    Label("Połącz swoje studia", systemImage: "building.columns.fill").font(.title2.bold())
+                    Text("Logujesz się wyłącznie na stronie SGH. Aplikacja otrzyma zgodę na odczyt planu, ocen i profilu.")
+                }
+                if !store.authorizationPending {
+                    Section {
+                        SecureField("Consumer Key", text: $key).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("Consumer Secret", text: $secret).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Link("Uzyskaj klucz w USOSapps SGH", destination: URL(string: USOSClient.base + "developers/")!)
+                    } header: { Text("1. Klucz Twojej aplikacji") } footer: {
+                        Text("To klucz deweloperski wydany dla SGH, nie numer albumu ani hasło. Własny klucz wpisujesz tylko tutaj. Nigdy nie umieszczaj go na GitHubie. Bez klucza dostępny jest tryb demo.")
+                    }
+                    Section {
+                        Button("Rozpocznij autoryzację") { Task { await store.beginLogin(key: key, secret: secret) } }
+                            .disabled(store.busy || key.isEmpty || secret.isEmpty)
+                    }
+                } else {
+                    Section("2. Zgoda na stronie uczelni") {
+                        if let url = store.authorizationURL { Link("Otwórz bezpieczne logowanie SGH", destination: url) }
+                        Text("Po zaakceptowaniu dostępu skopiuj kod PIN wyświetlony przez USOS i wróć do aplikacji.").font(.footnote)
+                    }
+                    Section("3. Potwierdzenie") {
+                        TextField("Kod PIN z USOS", text: $pin).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Button("Połącz konto") { Task { await store.completeLogin(pin: pin); if store.hasConnection { key = ""; secret = ""; pin = ""; dismiss() } } }.disabled(store.busy || pin.isEmpty)
+                        Button("Zacznij od nowa") { store.cancelLogin(); pin = "" }.disabled(store.busy)
                     }
                 }
-            }
-            Section { DemoLabel() }
-        }.navigationTitle("Ankiety")
+                if store.busy { Section { ProgressView("Łączę z SGH…") } }
+            }.navigationTitle("Połączenie z USOS").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Zamknij") { store.cancelLogin(); dismiss() }.disabled(store.busy) } }
+                .interactiveDismissDisabled(store.busy)
+        }
     }
 }
-
-struct AcademicProgressView: View {
-    @EnvironmentObject private var store: DemoStore
-    var body: some View {
-        List {
-            Section("Postęp demonstracyjny") {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack { Text("Zaliczone ECTS w danych testowych"); Spacer(); Text("\(store.earnedECTS) / 180").bold() }
-                    ProgressView(value: Double(store.earnedECTS), total: 180).tint(Theme.mint)
-                }.padding(.vertical, 6)
-                DetailLine(title: "Studia pierwszego stopnia", subtitle: "Przykładowy tok sześciosemestralny", icon: "building.columns")
-            }
-            Section { DemoLabel() }
-        }.navigationTitle("Tok studiów")
-    }
-}
-
-struct ProfileView: View {
-    var body: some View {
-        List {
-            Section {
-                HStack(spacing: 14) {
-                    Image(systemName: "person.crop.circle.fill")
-                        .font(.system(size: 54)).foregroundStyle(Theme.accent)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Student SGH").font(.headline)
-                        Text("Profil demonstracyjny").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }.padding(.vertical, 8)
-            }
-            Section("Informacje") {
-                LabeledContent("Uczelnia", value: "SGH w Warszawie")
-                LabeledContent("Poziom", value: "Studia I stopnia")
-                LabeledContent("Status", value: "Tryb demo")
-            }
-            Section { Text("Nie zapisujemy loginów ani haseł. Logowanie uczelniane będzie wymagało zatwierdzonej integracji z USOS API.").font(.footnote) }
-        }.navigationTitle("Profil")
-    }
-}
-
-struct SettingsView: View {
-    @EnvironmentObject private var store: DemoStore
-    var body: some View {
-        Form {
-            Section("Preferencje") {
-                Toggle("Przyszłe powiadomienia (demo)", isOn: $store.notificationsEnabled)
-                Toggle("Tylko przyszłe wydarzenia (demo)", isOn: $store.showOnlyUpcoming)
-            }
-            Section("Dane") {
-                LabeledContent("Źródło", value: "Dane lokalne")
-                LabeledContent("Połączenie USOS", value: "Nieaktywne")
-                Text("Ustawienia nie konfigurują powiadomień push ani synchronizacji z uczelnią.").font(.footnote).foregroundStyle(.secondary)
-            }
-        }.navigationTitle("Ustawienia")
-    }
-}
-
-struct DetailLine: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-    var body: some View {
-        HStack(spacing: 13) {
-            Image(systemName: icon).foregroundStyle(Theme.accent).frame(width: 27)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.subheadline.weight(.semibold))
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
-            }
-        }.padding(.vertical, 4)
-    }
-}
-
-#if DEBUG
-#Preview {
-    RootView()
-        .environmentObject(DemoStore())
-}
-#endif

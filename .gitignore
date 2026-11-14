@@ -4,3 +4,7 @@ DerivedData/
 dist/
 *.xcuserstate
 xcuserdata/
+Config/
+TestResults.xcresult/
+*.log
+USOSGlassSGH.xcodeproj/

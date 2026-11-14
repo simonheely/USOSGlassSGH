@@ -32,7 +32,12 @@ import UserNotifications
                 if let data = try? Data(contentsOf: cacheURL), let s = try? JSONDecoder().decode(Snapshot.self, from: data) {
                     student = s.student; events = s.events; grades = s.grades; weekStart = s.weekStart; refreshed = s.refreshed
                 }
-            } else { events = DemoData.events(week: weekStart); grades = DemoData.grades }
+            } else {
+                if DemoData.events(week: weekStart).last!.end < Date() {
+                    weekStart = CampusTime.calendar.date(byAdding: .day, value: 7, to: weekStart)!
+                }
+                events = DemoData.events(week: weekStart); grades = DemoData.grades
+            }
             if let data = try? Data(contentsOf: tasksURL) { tasks = try JSONDecoder().decode([StudyTask].self, from: data) }
         } catch { message = error.localizedDescription }
     }

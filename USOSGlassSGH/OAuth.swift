@@ -44,9 +44,12 @@ enum OAuth1 {
         s.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"))!
     }
     static func normalized(_ pairs: [(String, String)]) -> String {
-        pairs.map { (encode($0.0), encode($0.1)) }.sorted {
-            $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0
-        }.map { "\($0)=\($1)" }.joined(separator: "&")
+        let encoded: [(String, String)] = pairs.map { pair in (encode(pair.0), encode(pair.1)) }
+        let ordered = encoded.sorted { lhs, rhs in
+            lhs.0 == rhs.0 ? lhs.1 < rhs.1 : lhs.0 < rhs.0
+        }
+        let values: [String] = ordered.map { pair in pair.0 + "=" + pair.1 }
+        return values.joined(separator: "&")
     }
     static func signature(method: String, url: String, parameters: [(String, String)], consumerSecret: String, tokenSecret: String) -> String {
         let base = [method.uppercased(), url, normalized(parameters)].map(encode).joined(separator: "&")
